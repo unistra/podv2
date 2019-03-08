@@ -3,7 +3,7 @@ from django.core.management.base import BaseCommand
 from django.core import serializers
 from django.conf import settings
 from django.apps import apps
-from pod.video.models import Video
+from pod.video.models import Video, EncodingVideo, EncodingAudio, VideoRendition
 from pod.completion.models import Document, Track
 from pod.enrichment.models import Enrichment
 from django.core.exceptions import ObjectDoesNotExist
@@ -44,7 +44,7 @@ class Command(BaseCommand):
     help = 'Import from V1'
     valid_args = ['User', 'Channel', 'Theme', 'Type', 'Discipline', 'FlatPage',
                   'UserProfile', 'tags', 'Chapter', 'Contributor',
-                  'Overlay', 'docpods', 'trackpods', 'enrichpods', 'Pod']
+                  'Overlay', 'docpods', 'trackpods', 'enrichpods', 'Pod', 'encodingpods', 'thumbnails']
 
     def add_arguments(self, parser):
         parser.add_argument('import')
@@ -62,12 +62,12 @@ class Command(BaseCommand):
                 if type_to_import in ('User', 'Channel', 'Theme', 'Type',
                                       'Discipline', 'FlatPage', 'UserProfile',
                                       'Chapter', 'Contributor',
-                                      'Overlay', 'Pod'):
+                                      'Overlay', 'Pod',):
                     data = serializers.deserialize("json", infile)
                     for obj in data:
                         self.save_object(type_to_import, obj)
                 if type_to_import in (
-                        'tags', 'docpods', 'trackpods', 'enrichpods'):
+                        'tags', 'docpods', 'trackpods', 'enrichpods','encodingpods','thumbnails'):
                     data = json.load(infile)
                     for obj in data:
                         if int(obj) not in VIDEO_ID_TO_EXCLUDE:
@@ -202,6 +202,87 @@ class Command(BaseCommand):
             self.add_track_to_video(obj, data)
         if type_to_import in ('enrichpods',):
             self.add_enrich_to_video(obj, data)
+        if type_to_import in ('encodingpods',):
+            self.add_encodings_to_video(obj,data)
+        if type_to_import in ('thumbnails',):
+            self.add_thumbnails_to_video(obj,data)
+
+    def add_thumbnails_to_video(self,video_id,list_thumbnails):
+        try:
+            video = Video.objects.get(id=video_id)
+            for thumb in list_thumbnails:
+                if thumb['thumbnail']!='':
+                    source_url = "https:"+thumb['thumbnail']
+                    if source_url != "":
+                        dest_file = os.path.join( settings.MEDIA_ROOT,'files',video.owner.owner.hashkey,os.path.basename(thumb['thumbnail']))
+                        print(dest_file)
+                        os.makedirs(os.path.dirname(dest_file), exist_ok=True)
+                        new_file = wget.download(source_url, dest_file)
+                        image = self.create_and_save_image(
+                        new_file, video) if new_file != "" else None
+                        video.thumbnail = image
+                        video.save()
+
+
+
+
+
+        except ObjectDoesNotExist:
+            print(video_id, " does not exist")
+
+
+    def add_encodings_to_video(self, video_id, list_encodings):
+        try:
+            video = Video.objects.get(id=video_id)
+            for enc in list_encodings:
+                if enc['eformat'] == 'video/mp4' and (enc['etype']=='360' or enc['etype']=='720' or enc['etype']=='1080'):
+                    name=enc['etype']+"p"
+                    encoding_format = enc['eformat']
+                    videofilenameMp4= enc['efile']
+                    rendition = VideoRendition.objects.get(resolution__contains=enc['etype'])
+                    encoding, created = EncodingVideo.objects.get_or_create(
+                        name=name,video=video,rendition=rendition,encoding_format=encoding_format)
+                    #prendre le chemin de la video
+                    print(video.video.name)
+                    source_url = FROM_URL + videofilenameMp4 if FROM_URL != "" else ""
+                    if source_url != "":
+                        dest_file = os.path.join( settings.MEDIA_ROOT,'videos',video.owner.owner.hashkey,os.path.basename(videofilenameMp4))
+                    print(source_url)
+                    print(dest_file)
+                    os.makedirs(os.path.dirname(dest_file), exist_ok=True)#creation du repertoire de depot
+                    source_file = dest_file.replace(os.path.join(settings.MEDIA_ROOT, ""), '')
+                    print(source_file)
+                    encoding.source_file= source_file
+                    #reste à download 
+                    new_file = wget.download(source_url, dest_file)
+                    encoding.save()
+                elif enc['eformat'] == 'audio/mp3':
+                    encoding_format = enc['eformat']
+                    videofilenameMp4= enc['efile']
+                    encoding, created = EncodingAudio.objects.get_or_create(
+                        name="audio",
+                        video=video,
+                        encoding_format="audio/mp3")
+                    #prendre le chemin de la video
+                    print(video.video.name)
+                    source_url = FROM_URL + videofilenameMp4 if FROM_URL != "" else ""
+                    if source_url != "":
+                        dest_file = os.path.join( settings.MEDIA_ROOT,'videos',video.owner.owner.hashkey,os.path.basename(videofilenameMp4))
+                    print(source_url)
+                    print(dest_file)
+                    os.makedirs(os.path.dirname(dest_file), exist_ok=True)#creation du repertoire de depot
+                    source_file = dest_file.replace(os.path.join(settings.MEDIA_ROOT, ""), '')
+                    print(source_file)
+                    encoding.source_file= source_file
+                    #reste à download
+                    new_file = wget.download(source_url, dest_file)
+                    encoding.save()
+                else:
+                    print(enc['etype'], " will not be download")
+
+        except ObjectDoesNotExist:
+            print(video_id, " does not exist")
+
 
     def add_tag_to_video(self, video_id, list_tag):
         try:
